@@ -178,3 +178,5 @@ cython_debug/
 data/*
 
 figures/*
+
+code/utils/config.py
