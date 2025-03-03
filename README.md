@@ -5,7 +5,7 @@ Authors: Joshua Cohen, Ryan Green, Leilanie Rubinstein, Rachel Swick
 ## Repository Structure
 ```
 📦 
-.gitignore
+├─ .gitignore
 ├─ README.md
 ├─ code
 │  ├─ 00_label_data
@@ -14,7 +14,7 @@ Authors: Joshua Cohen, Ryan Green, Leilanie Rubinstein, Rachel Swick
 │  │  └─ 02_buffer_buildings.ipynb
 │  ├─ 01_satellite_imagery
 │  │  ├─ 00_download_basemaps.ipynb
-01_plot_imagery.ipynb
+│  │  └─ 01_plot_imagery.ipynb
 │  ├─ 02_clipping
 │  │  ├─ 00_imagery_clipping.ipynb
 │  │  ├─ imagery_clipping.ipynb
