@@ -18,6 +18,7 @@ Classes:
         - get_results
         - download_results
         - organize_files
+    - PlanetB
     - RCF
         - __init__
         - forward
@@ -45,10 +46,12 @@ Date: 2023-06-12
 
 import os
 import re
+import sys
 import json
 import time
 import shutil
 import pathlib
+import logging
 import requests
 import rasterio
 import rasterio.features
@@ -1050,4 +1053,317 @@ def parse_quad_id(quad_id_str: str) -> list:
     # Removing brackets and splitting by comma
     return quad_id_str.strip("[]").replace("'", "").split(", ")
 
+
+class PlanetBasemapsAPI:
+    """
+    A Python client focused exclusively on Planet's Basemaps API for:
+      - Listing mosaics
+      - Retrieving quads
+      - Downloading quads directly
+    """
+
+    PAGE_SIZE = 200
+
+    def __init__(self, api_key: str, basemaps_url: str = basemap_url) -> None:
+        """
+        Initialize the Basemaps API client.
+
+        Parameters
+        ----------
+        api_key : str
+            Planet API key used for authentication.
+        basemaps_url : str
+            Base URL for the Planet Basemaps API.
+        """
+        self.api_key = api_key
+        self.basemaps_url = basemaps_url
+        self.session = self._authenticate_to_planet(api_key)
+        self.mosaic_id = None
+
+    @staticmethod
+    def _authenticate_to_planet(api_key: str) -> requests.Session:
+        """
+        Creates an authenticated session.
+
+        Parameters
+        ----------
+        api_key : str
+            Planet API key
+
+        Returns
+        -------
+        requests.Session
+            Session authenticated with the given API key.
+        """
+        session = requests.Session()
+        session.auth = (api_key, "")
+        return session
+
+    def check_authentication_status(self) -> str:
+        """
+        Check that we can access the basemaps endpoint (authentication test).
+
+        Returns
+        -------
+        str
+            A message indicating authentication status.
+        """
+        try:
+            url = f"{self.basemaps_url}/mosaics"
+            resp = self.session.get(url, params={"_page_size": 1})  # quick check
+            resp.raise_for_status()
+            return "Authentication successful."
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                return "Authentication failed: Unauthorized."
+            else:
+                return f"Authentication check failed with status code: {e.response.status_code}"
+        except Exception as e:
+            return f"An error occurred: {e}"
+
+    def get_mosaics(self, search_str: str = None) -> List[str]:
+        """
+        Retrieves the names of available mosaics from the Basemaps API.
+
+        Parameters
+        ----------
+        search_str : str, optional
+            If provided, return only mosaic names containing this substring (case-insensitive).
+
+        Returns
+        -------
+        list of str
+            Names of mosaics matching the (optional) search.
+        """
+        url = f"{self.basemaps_url}/mosaics"
+        params = {"_page_size": self.PAGE_SIZE}
+        mosaic_names = []
+
+        # Paginate through all mosaics
+        while url:
+            resp = self.session.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+            for mosaic in data.get("mosaics", []):
+                mosaic_names.append(mosaic["name"])
+
+            url = data["_links"].get("_next")
+
+        if search_str:
+            import re
+            pattern = re.compile(search_str, re.IGNORECASE)
+            mosaic_names = [name for name in mosaic_names if pattern.search(name)]
+        return mosaic_names
+
+    def get_mosaic_id(self, mosaic_name: str) -> str:
+        """
+        Retrieves the ID of a specific mosaic given its name.
+
+        Parameters
+        ----------
+        mosaic_name : str
+            Exact name of the mosaic to find.
+
+        Returns
+        -------
+        str
+            The mosaic ID.
+
+        Raises
+        ------
+        ValueError
+            If no mosaic with that name is found.
+        """
+        url = f"{self.basemaps_url}/mosaics"
+        params = {
+            "name__is": mosaic_name,
+            "_page_size": self.PAGE_SIZE,
+        }
+
+        while url:
+            resp = self.session.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+            mosaics = data.get("mosaics", [])
+            if mosaics:
+                return mosaics[0]["id"]
+
+            url = data["_links"].get("_next")
+
+        raise ValueError(f"No mosaic found with name '{mosaic_name}'.")
+
+    def set_mosaic(self, mosaic_name: str) -> None:
+        """
+        Sets the internal mosaic_id attribute based on provided mosaic name.
+
+        Parameters
+        ----------
+        mosaic_name : str
+            The mosaic name to retrieve and store as self.mosaic_id.
+
+        Raises
+        ------
+        ValueError
+            If no mosaic with that name is found.
+        """
+        self.mosaic_id = self.get_mosaic_id(mosaic_name)
+
+    def get_items(
+        self,
+        bbox_aoi: List[float],
+        mosaic_id: str = None,
+    ) -> List[Dict[str, Union[str, List, Dict]]]:
+        """
+        Retrieves basemap quads/items within a bounding box.
+
+        Parameters
+        ----------
+        bbox_aoi : list of float
+            [minX, minY, maxX, maxY] bounding box (EPSG:4326).
+        mosaic_id : str, optional
+            The mosaic ID. If not provided, uses self.mosaic_id.
+
+        Returns
+        -------
+        list of dict
+            List of quad metadata dicts (each includes _links.download).
+        """
+        if mosaic_id is None:
+            if not self.mosaic_id:
+                raise ValueError(
+                    "No mosaic_id provided or set. Call set_mosaic() first."
+                )
+            mosaic_id = self.mosaic_id
+
+        quads_url = f"{self.basemaps_url}/mosaics/{mosaic_id}/quads"
+        params = {
+            "bbox": ",".join(map(str, bbox_aoi)),
+            "minimal": True,
+            "_page_size": self.PAGE_SIZE,
+        }
+
+        all_quads = []
+        while quads_url:
+            resp = self.session.get(quads_url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+            items = data["items"]
+            all_quads.extend(items)
+
+            quads_url = data["_links"].get("_next")
+
+        # Remove duplicates if they appear
+        unique_quads = {q["id"]: q for q in all_quads}
+        return list(unique_quads.values())
+
+    @staticmethod
+    def convert_items_to_geodataframe(
+        all_items: List[Dict[str, Union[str, List, Dict]]],
+    ) -> gpd.GeoDataFrame:
+        """
+        Converts a list of quad dicts into a GeoDataFrame.
+
+        Parameters
+        ----------
+        all_items : list of dict
+            The Basemap quads metadata.
+
+        Returns
+        -------
+        geopandas.GeoDataFrame
+            A GDF of quads, with geometry from 'bbox'.
+        """
+        geometry_list = []
+        for item in all_items:
+            # item['bbox'] = [minX, minY, maxX, maxY]
+            minx, miny, maxx, maxy = item["bbox"]
+            geometry_list.append(
+                Polygon([(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)])
+            )
+
+        gdf = gpd.GeoDataFrame(all_items, geometry=geometry_list, crs=geodetic)
+        # Optionally drop unwanted columns
+        drop_cols = ["_links", "bbox", "percent_covered"]
+        for col in drop_cols:
+            if col in gdf.columns:
+                gdf.drop(columns=[col], inplace=True, errors="ignore")
+
+        return gdf
+
+    def download_quads(
+        self,
+        quads: List[Dict],
+        directory: str = "data",
+        overwrite: bool = False,
+        log_interval: int = 100,
+        logger=None,
+    ) -> None:
+        """
+        Downloads the quads directly from the Basemaps API.
+        Each quad dict should include "_links['download']" from get_items().
+
+        Parameters
+        ----------
+        quads : list of dict
+            Quad metadata (each item should have 'id' and '_links.download').
+        directory : str, optional
+            Directory where files are saved.
+        overwrite : bool, optional
+            If True, overwrite existing files.
+        log_interval : int, optional
+            Log progress after every N downloads.
+        """
+        logger = logging.getLogger(__name__)
+        logging.basicConfig(
+            stream=sys.stdout,
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s - %(message)s",
+        )
+        total_quads = len(quads)
+        download_count = 0
+        skip_count = 0
+
+        for i, quad in enumerate(quads):
+            quad_id = quad["id"]
+            download_url = quad["_links"]["download"]  # direct TIF link
+
+            # Output filename: e.g., <quad_id>.tif
+            quad_name = f"{quad_id}_quad.tif"
+            out_path = pathlib.Path(directory) / quad_name
+
+            # Skip existing files if not overwriting
+            if out_path.exists() and not overwrite:
+                skip_count += 1
+                continue
+
+            # Create folder if needed
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Download the quad
+            try:
+                resp = self.session.get(download_url, stream=True)
+                resp.raise_for_status()
+
+                with open(out_path, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=8192):
+                        f.write(chunk)
+
+                download_count += 1
+
+                # Log progress at specified intervals
+                if (i + 1) % log_interval == 0 or i == total_quads - 1:
+                    logger.info(
+                        f"Progress: {i + 1}/{total_quads} quads processed ({download_count} downloaded, {skip_count} skipped)"
+                    )
+
+            except requests.exceptions.RequestException as e:
+                logger.info(f"Failed to download {quad_id} -> {e}")
+                continue
+
+        logger.info(
+            f"Download complete. Total: {download_count} downloaded, {skip_count} skipped"
+        )
 
