@@ -1,4 +1,4 @@
-name: prg
+name: wildfire_prep
 channels:
   - conda-forge
   # - pytorch
