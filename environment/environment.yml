@@ -59,5 +59,6 @@ dependencies:
   - torchaudio
   - torchvision
   - xarray
+  - rioxarray
   - pip:
     - -r requirements.txt
