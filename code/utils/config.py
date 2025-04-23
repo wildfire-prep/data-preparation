@@ -12,10 +12,12 @@ user = "leilanie"
 #####################################################
 
 data_dir = "/capstone/wildfire_prep/data"
+cleaned_inspections_dir = f"{data_dir}/inspections_data/cleaned_status"
+basemap_dir = f"{data_dir}/basemaps"
+
 repo_dir = f"/capstone/wildfire_prep/{user}/data-preparation"
 
 fig_dir = f"{repo_dir}/figures"
-basemap_dir = f"{data_dir}/basemaps"
 
 #####################################################
 ##################### PARAMETERS
@@ -23,6 +25,21 @@ basemap_dir = f"{data_dir}/basemaps"
 
 geodetic_crs = "EPSG:4326"
 mercator_crs = "EPSG:3857"
+albers_crs = "EPSG:3310" # equal area projection - use this for calculating buffer areas
 mollweide_crs = "ESRI:54009"
 
+#####################################################
+##################### FUNCTIONS
+#####################################################
+
+# Function to import cleaned inspections data
+def import_inspections_data(year):
+    """
+    Function to read in inspections data for a given year and convert to Albers CRS.
+    """
+    inspections = os.path.join(
+        cleaned_inspections_dir, f"inspections_{year}.geojson"
+    )
+    inspections = gpd.read_file(inspections).to_crs(albers_crs)
+    return inspections
 
