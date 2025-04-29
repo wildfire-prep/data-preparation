@@ -181,4 +181,5 @@ figures/*
 
 code/utils/*
 
-logs/*
+logs/*code/02_clipping/ndvi_reprojected.tif
+code/02_clipping/ndvi.tif
