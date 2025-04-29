@@ -180,3 +180,5 @@ data/*
 figures/*
 
 code/utils/*
+
+logs/*
