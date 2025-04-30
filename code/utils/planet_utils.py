@@ -79,7 +79,7 @@ mollweide = "ESRI:54009"
 
 # Define API URLS
 data_url = "https://api.planet.com/data/v1"
-basemap_url = "https://api.planet.com/basemaps/v1/mosaics"
+basemap_url = "https://api.planet.com/basemaps/v1"
 order_url = "https://api.planet.com/compute/ops/orders/v2"
 
 
@@ -1366,4 +1366,5 @@ class PlanetBasemapsAPI:
         logger.info(
             f"Download complete. Total: {download_count} downloaded, {skip_count} skipped"
         )
+
 
