@@ -9,6 +9,10 @@ Ryan Green
 Leilanie Rubinstein
 Rachel Swick
 
+## Data
+
+Data is stored separately from our repository for the purposes of this analysis.
+
 ## Repository Structure
 
 ```
