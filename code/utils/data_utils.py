@@ -1,6 +1,6 @@
 """
-This module contains utility functions for modeling artisanal scale mining, 
-in particular, manipulating data. 
+This module contains utility functions for modeling artisanal scale mining,
+in particular, manipulating data.
 
 Functions:
 ----------
@@ -19,22 +19,15 @@ Functions:
     - reorder_columns
     - contains_nan
     - convert_list_columns_to_float
-    - subsample_for_proportion
 
 Classes:
 ----------
-    - ImageDirectoryDataset
+    - VisualBasemapDataset
         - __init__
         - __len__
         - __getitem__
-        - normalize_image
-        - apply_normalization
-        - band_level_normalization
-        - image_level_normalization
-        - quad_level_normalization
-        - country_level_normalization
-        - dataset_level_normalization
-        
+
+
 Author: Cullen Molitor, Cullen_Molitor@bren.ucsb.edu
 Date: 2023-10-20
 """
@@ -51,10 +44,11 @@ from operator import gt, ge
 from ast import literal_eval
 from shapely.geometry import Point, Polygon, MultiPolygon, GeometryCollection
 from shapely.ops import nearest_points
+from shapely.geometry import box
 from torch.utils.data import Dataset
 from torch.nn import functional as F
 from sklearn.model_selection import train_test_split
-from typing import Dict, List, Tuple, Union, Callable, Any
+from typing import Dict, List, Tuple, Union, Callable, Any, Optional
 
 
 def create_grid(
@@ -180,6 +174,7 @@ def create_grid(
 
     return final_result
 
+
 def _to_geodataframe(borders, geometry_col: str, id_col: str) -> gpd.GeoDataFrame:
     """
     Internal helper that converts various input types into a standardized GeoDataFrame.
@@ -233,6 +228,7 @@ def _to_geodataframe(borders, geometry_col: str, id_col: str) -> gpd.GeoDataFram
         )
 
     return gdf
+
 
 def create_country_grid(borders, resolution=0.01):
     """
@@ -300,6 +296,7 @@ def create_country_grid(borders, resolution=0.01):
     final_result = pd.concat(result_list, ignore_index=True)
 
     return final_result
+
 
 def map_columns(row: pd.Series) -> tuple:
     """
@@ -753,7 +750,7 @@ def extract_features_fn(df: pd.DataFrame) -> pd.DataFrame:
         placed immediately after the 'image_features' column.
 
     """
-    
+
     def process_filename(filename: str) -> Dict[str, str]:
         """
         Processes the given filename and extracts the required features.
@@ -774,17 +771,17 @@ def extract_features_fn(df: pd.DataFrame) -> pd.DataFrame:
 
         # Split the filename into key-value pairs
         parts = filename.split("_")
-        
+
         # Initialize an empty dictionary to store the features
         features = {}
-        
+
         # Loop through each part to extract key-value pairs
         for part in parts:
             key_value = part.split("-")
             key = key_value[-1]
             value = "-".join(key_value[:-1])
             features[key] = value
-            
+
         return features
 
     # Apply the process_filename function to each value in the 'image_features' column
@@ -860,7 +857,7 @@ def contains_nan(x: List[Union[float, int]]) -> bool:
     >>> contains_nan([1, 2, 3])
     False
     """
-    
+
     return any(pd.isna(i) for i in x)
 
 
@@ -896,299 +893,200 @@ def convert_list_columns_to_float(
     >>> convert_columns_to_float(df, ['mean', 'std'])
     """
     for column in columns_to_convert:
-        if df[column].dtype == 'object':
+        if df[column].dtype == "object":
             # Check if the first element is a string representation of a list
             first_element = df[column].iloc[0]
-            if isinstance(first_element, str) and first_element.startswith('[') and first_element.endswith(']'):
+            if (
+                isinstance(first_element, str)
+                and first_element.startswith("[")
+                and first_element.endswith("]")
+            ):
                 df[column] = df[column].apply(
                     lambda x: list(map(float, literal_eval(x)))
                 )
-    
+
     return df
 
 
-class ImageDirectoryDataset(Dataset):
+class VisualBasemapDataset(Dataset):
     """
-    A Dataset for loading and preprocessing images stored in a directory.
+    A custom Dataset that loads and transforms .tif images from specified directories.
+
+    Specifically, it:
+
+    - Loads only the first three bands (RGB).
+    - Normalizes the pixel values by dividing by 255.
+    - Optionally resizes the images to a specified size.
+    - Includes metadata: 'unique_id' and 'basemap_id'.
+
+    Parameters
+    ----------
+    root_dir : str
+        Root directory containing multiple 'global_quarterly_*_mosaic' subdirectories.
+    transform : callable, optional
+        Optional transform to be applied on a sample.
+    resize : tuple of int, optional
+        Desired output size as (height, width). If None, no resizing is applied.
+    specific_dir : str, optional
+        If provided, only load images from this directory under root_dir.
+    verbosity : int, optional
+        Level of verbosity. Default is 0 (silent). Set to 1 to enable print statements.
+
     """
 
     def __init__(
         self,
-        root_dir,
-        bands=[1, 2, 3, 4],
-        normalization_type=None,
-        normalization_level="band",
-        stats_df=None,
-        target_size=None,
+        root_dir: str,
+        transform: Optional[Callable] = None,
+        resize: Optional[Tuple[int, int]] = None,
+        specific_dir: Optional[str] = None,
+        clipped: bool = False,
+        verbosity: int = 0,
     ):
-        """
-        Initialize the ImageDirectoryDataset.
-
-        Parameters:
-        ----------
-            root_dir (str): The directory where the images are stored.
-            stats_df (DataFrame): A dataframe with statistics for dataset or country level normalization.
-            bands (list, optional): A list of the indices of the bands to select from the images. Default is [1, 2, 3, 4].
-            normalization_type (str, optional): The type of normalization ('min-max', 'max', or 'z-score'). Default is None.
-            normalization_level (str, optional): The level at which normalization is applied ('band', 'image', 'dataset', 
-                                                'quad, or 'country'). Default is 'band'.
-        """
         self.root_dir = root_dir
-        self.image_files = [f for f in os.listdir(root_dir) if f.endswith(".tif")]
-        self.bands = bands
-        self.normalization_type = normalization_type
-        self.normalization_level = normalization_level
-        self.stats_df = stats_df
-        self.target_size = target_size
+        self.transform = transform
+        self.resize = resize
+        self.specific_dir = specific_dir
+        self.verbosity = verbosity
+        self.clipped = clipped
+        self.image_paths = self._gather_image_paths()
 
-    def __len__(self):
-        """Return the number of images in the dataset."""
-        return len(self.image_files)
-
-    def __getitem__(self, idx):
+    def _gather_image_paths(self) -> List[str]:
         """
-        Load and preprocess an image based on its index.
+        Collects paths to all .tif files.
 
-        Parameters:
+        If `specific_dir` is provided, only loads images from that directory.
+        Otherwise, traverses the root directory and collects paths to all .tif files within subdirectories.
+
+        Returns
+        -------
+        List[str]
+            List of file paths to .tif images.
+
+        Raises
+        ------
+        ValueError
+            If the specified directory does not exist.
+
+        """
+        image_paths = []
+
+        if self.specific_dir:
+            # Use specific_dir
+            dir_to_search = os.path.join(self.root_dir, self.specific_dir)
+            if os.path.isdir(dir_to_search):
+                for file_name in os.listdir(dir_to_search):
+                    if file_name.lower().endswith(".tif"):
+                        full_path = os.path.join(dir_to_search, file_name)
+                        image_paths.append(full_path)
+            else:
+                raise ValueError(
+                    f"Specified directory '{dir_to_search}' does not exist"
+                )
+        else:
+            # Search over subdirectories as before
+            for mosaic_dir in os.listdir(self.root_dir):
+                mosaic_path = os.path.join(self.root_dir, mosaic_dir)
+                if (
+                    os.path.isdir(mosaic_path)
+                    and mosaic_dir.startswith("global_")
+                    and mosaic_dir.endswith("_mosaic")
+                ):
+                    if not self.clipped:
+                        image_dir = os.path.join(mosaic_path, "basemap_quads")
+                    else:
+                        image_dir = mosaic_path
+                    for file_name in os.listdir(image_dir):
+                        if file_name.lower().endswith(".tif"):
+                            full_path = os.path.join(
+                                image_dir, file_name
+                            )
+                            image_paths.append(full_path)
+
+        if self.verbosity > 0:
+            print(f"Total images found: {len(image_paths)}")
+
+        return image_paths
+
+    def __len__(self) -> int:
+        """
+        Returns the total number of images in the dataset.
+
+        Returns
+        -------
+        int
+            The length of the dataset.
+
+        """
+        return len(self.image_paths)
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        """
+        Loads and returns the transformed image and its metadata at the specified index.
+
+        Parameters
         ----------
-            idx (int): The index of the image to load.
+        idx : int
+            Index of the image to retrieve.
 
-        Returns:
-        --------
-            dict: A dictionary with keys 'image' and 'image_name'.
-                'image' is a tensor containing the preprocessed image data,
-                and 'image_name' is the name of the image file (without the extension).
+        Returns
+        -------
+        Dict[str, Any]
+            A dictionary containing:
+                - 'image': Normalized (and optionally resized) image tensor.
+                - 'basemap_id': Name of the basemap directory.
+                - 'unique_id': Image file name without the '.tif' extension.
+
+        Raises
+        ------
+        IndexError
+            If the index is out of bounds.
+
         """
-        img_path = os.path.join(self.root_dir, self.image_files[idx])
-        with rasterio.open(img_path) as src:
-            image = src.read(self.bands)
-            
-        image = image.astype("float32")
-        image_name = os.path.splitext(self.image_files[idx])[0]
-        image = self.normalize_image(image, image_name)
-        image = torch.from_numpy(image)
-        
-        if self.target_size:
-            _, height, width = image.shape
-            new_height, new_width = self.target_size
-            image = F.interpolate(
-                image.unsqueeze(0), 
-                size=(new_height, new_width), 
-                mode='bilinear', 
-                align_corners=False
-            ).squeeze(0)
-            
-        return {"image": image, "image_name": image_name}
+        if idx < 0 or idx >= len(self.image_paths):
+            raise IndexError("Index out of bounds")
 
-    def normalize_image(self, image, image_name):
-        """Select and apply the appropriate normalization method based on the normalization level."""
-        normalization_methods = {
-            "band": self.band_level_normalization,
-            "image": self.image_level_normalization, 
-            "quad": lambda x: self.quad_level_normalization(x, image_name),
-            "country": lambda x: self.country_level_normalization(x, image_name),
-            "dataset": self.dataset_level_normalization,
+        img_path = self.image_paths[idx]
+
+        # **1. Extract Metadata**
+        # Extract 'unique_id' from file name (without extension)
+        file_name = os.path.basename(img_path)
+        unique_id, _ = os.path.splitext(file_name)
+
+        # Extract 'basemap_id' from the parent directory name
+        basemap_id = os.path.basename(os.path.dirname(img_path))
+
+        # **2. Read Only the First Three Bands (RGB)**
+        with rasterio.open(img_path) as src:
+            rgb_bands = src.read([1, 2, 3])  # Bands are 1-indexed in rasterio
+
+            # **3. Convert to Float32 and Normalize**
+            rgb_bands = rgb_bands.astype(np.float32) / 255.0  # Normalize to [0, 1]
+
+        # **4. Apply Optional Transformations**
+        if self.transform:
+            rgb_bands = self.transform(rgb_bands)
+
+        # **5. Convert to PyTorch Tensor**
+        # Current shape: (C, H, W) -> Desired shape: (C, H, W) as Tensor
+        image_tensor = torch.from_numpy(rgb_bands)
+
+        # **6. Apply Optional Resizing**
+        if self.resize:
+            # torch.nn.functional.interpolate expects input of shape (N, C, H, W)
+            # Add batch dimension, perform interpolation, then remove batch dimension
+            image_tensor = F.interpolate(
+                image_tensor.unsqueeze(0),
+                size=self.resize,
+                mode="bilinear",
+                align_corners=False,
+            ).squeeze(0)
+
+        # **7. Prepare the Sample Dictionary**
+        sample = {
+            "image": image_tensor,  # Shape: (3, H, W)
+            "basemap_id": basemap_id,  # String
+            "unique_id": unique_id,  # String
         }
 
-        if self.normalization_type:
-            return normalization_methods[self.normalization_level](image)
-        return image
-
-    def apply_normalization(
-        self, image, min_val=None, max_val=None, mean_val=None, std_val=None
-    ):
-        """
-        Apply the specified normalization to the image data.
-
-        Parameters:
-        ----------
-            image (array): The image data array.
-            min_val (float, optional): Minimum value for 'min-max' normalization.
-            max_val (float, optional): Maximum value for 'min-max' and 'max' normalization.
-            mean_val (float, optional): Mean value for 'z-score' normalization.
-            std_val (float, optional): Standard deviation for 'z-score' normalization.
-
-        Returns:
-        --------
-            array: The normalized image data.
-        """
-        if self.normalization_type == "min-max":
-            denominator = max(max_val - min_val, 1e-8)  # Avoid division by zero
-            return (image - min_val) / denominator
-        elif self.normalization_type == "max":
-            denominator = max(max_val, 1e-8)  # Avoid division by zero
-            return image / denominator
-        elif self.normalization_type == "z-score":
-            denominator = max(std_val, 1e-8)  # Avoid division by zero
-            return (image - mean_val) / denominator
-        return image
-
-    def band_level_normalization(self, image):
-        """
-        Apply normalization band by band.
-
-        Parameters:
-        ----------
-            image (array): The image data array.
-
-        Returns:
-        --------
-            array: The normalized image data.
-        """
-        for band in range(image.shape[0]):
-            image[band] = self.apply_normalization(
-                image[band],
-                min_val=image[band].min(),
-                max_val=image[band].max(),
-                mean_val=np.mean(image[band]),
-                std_val=np.std(image[band]),
-            )
-        return image
-
-    def image_level_normalization(self, image):
-        """
-        Apply normalization at the entire image level.
-
-        Parameters:
-        ----------
-            image (array): The image data array.
-
-        Returns:
-        --------
-            array: The normalized image data.
-        """
-        return self.apply_normalization(
-            image,
-            min_val=image.min(),
-            max_val=image.max(),
-            mean_val=np.mean(image),
-            std_val=np.std(image),
-        )
-        
-    def quad_level_normalization(self, image, image_name):
-        """
-        Apply normalization based on the statistics provided in stats_df for a specific quad(s).
-
-        Parameters:
-        ----------
-            image (array): The image data array.
-            image_name (str): The name of the image file without the extension (e.g., 'CCC_ID').
-
-        Returns:
-        --------
-            array: The normalized image data.
-        """
-        
-        stats = self.stats_df.loc[image_name]
-
-        for band in range(image.shape[0]):
-            image[band] = self.apply_normalization(
-                image[band],
-                min_val=stats["min"][band],
-                max_val=stats['max'][band],
-                mean_val=stats["mean"][band],
-                std_val=stats["std"][band]
-            )
-        return image
-    
-    def country_level_normalization(self, image, image_name):
-        """
-        Apply normalization based on the statistics provided in stats_df for a specific country.
-
-        Parameters:
-        ----------
-            image (array): The image data array.
-            image_name (str): The name of the image file without the extension (e.g., 'CCC_ID').
-
-        Returns:
-        --------
-            array: The normalized image data.
-        """
-        
-        stats = self.stats_df.loc[image_name]
-
-        for band in range(image.shape[0]):
-            image[band] = self.apply_normalization(
-                image[band],
-                min_val=stats["min"][band],
-                max_val=stats['max'][band],
-                mean_val=stats["mean"][band],
-                std_val=stats["std"][band]
-            )
-        return image
-    
-        # country_code = image_name.split('_')[0]
-        
-        # stats = self.stats_df.loc[country_code]
-
-        # for band in range(image.shape[0]):
-        #     image[band] = self.apply_normalization(
-        #         image[band],
-        #         min_val=stats["min"][band],
-        #         max_val=stats['99th percentile max'][band],
-        #         mean_val=stats["mean"][band],
-        #         std_val=stats["std"][band]
-        #     )
-        # return image
-
-    def dataset_level_normalization(self, image):
-        """
-        Apply normalization based on the statistics provided in stats_df.
-
-        Parameters:
-        ----------
-            image (array): The image data array.
-            image_name (str): The name of the image file without the extension (e.g., 'CCC_ID').
-
-        Returns:
-        --------
-            array: The normalized image data.
-        """
-        stats = self.stats_df.loc['dataset']
-
-        for band in range(image.shape[0]):
-            image[band] = self.apply_normalization(
-                image[band],
-                min_val=stats["min"][band],
-                max_val=stats['99th percentile max'][band],
-                mean_val=stats["mean"][band],
-                std_val=stats["std"][band]
-            )
-        return image
-    
-    
-    
-def subsample_for_proportion(clu_data, uar_data, country, cluster_proportion, seed=42):
-    """
-    Subsample the CLU data to achieve a desired proportion in the final dataset.
-
-    Parameters
-    ----------
-    clu_data : DataFrame
-        Data containing CLU samples.
-    uar_data : DataFrame
-        Data containing UAR samples.
-    country : str
-        The country to subsample for.
-    cluster_proportion : float
-        Proportion of the country's area covered by clusters.
-    seed : int, optional
-        The random seed for reproducibility (default is 42).
-
-    Returns
-    -------
-    DataFrame
-        Combined dataset with the desired proportion of CLU and UAR.
-    """
-    country_clu_data = clu_data[clu_data["country"] == country]
-    country_uar_data = uar_data[uar_data["country"] == country]
-
-    total_samples_needed = len(country_uar_data) / (1 - cluster_proportion)
-    clu_samples_needed = int(total_samples_needed * cluster_proportion)
-
-    subsampled_clu = country_clu_data.sample(
-        n=min(clu_samples_needed, len(country_clu_data)), random_state=seed
-    )
-    combined_data = pd.concat([subsampled_clu, country_uar_data])
-
-    return combined_data
+        return sample
