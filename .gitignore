@@ -180,3 +180,9 @@ data/*
 figures/*
 
 code/utils/*
+
+# josh's section
+XX_misc/
+shp_for_bbox/
+manifest.json
+sample_multipoly_json.geojson
