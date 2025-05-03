@@ -1,8 +1,98 @@
+import geopandas as gpd
+
 from pyproj import Transformer
 
 from shapely.geometry import shape, mapping
 from shapely.validation import explain_validity
 from shapely.ops import unary_union
+
+
+"""
+Recursively converts tuples to lists in a nested dictionary or list structure. Use in the following functions.
+
+Parameters:
+    data (any): The input data (dict, list, or tuple).
+    
+Returns:
+    any: The modified data with tuples converted to lists.
+"""
+
+def convert_tuples_to_lists(data):
+
+        if isinstance(data, tuple):
+            return [convert_tuples_to_lists(item) for item in data]
+        elif isinstance(data, list):
+            return [convert_tuples_to_lists(item) for item in data]
+        elif isinstance(data, dict):
+            return {key: convert_tuples_to_lists(value) for key, value in data.items()}
+        else:
+            return data  # Base case: return the item if it's not a tuple/list/dict
+
+
+
+"""
+Convex Hull GeoJSON Creator
+write docs later
+"""
+
+
+def make_convex_hull(buffers_set_df, month_col = "month", month_vals = range(1,13)):
+
+
+    # create coordinate converter
+    transformer = Transformer.from_crs("EPSG:3310", "EPSG:4326", always_xy=True)
+
+    # filter the geojson for parcels inspected on a given month
+    filtered_df = buffers_set_df.loc[buffers_set_df[month_col].isin(month_vals)]
+
+    # exit func if month has no inspections
+    if len(filtered_df) < 1:
+        return None
+
+    convex_hull = filtered_df.unary_union.convex_hull
+    geodict_hull = gpd.GeoDataFrame(geometry=[convex_hull], crs=filtered_df.crs).to_geo_dict()["features"][0]["geometry"]
+
+    # tuples to lists
+    geodict_hull = convert_tuples_to_lists(geodict_hull)
+    # # give cords extra nesting
+    # geodict_hull["coordinates"] = [geodict_hull["coordinates"]]
+
+    # init geojson structure for master list
+    geojson = {
+        "type": "MultiPolygon", 
+        "coordinates": []
+    }
+
+    curr_hull = geodict_hull["coordinates"][0]
+
+    vert_count = 0
+
+    curr_hull = [list(transformer.transform(*coord)) for coord in curr_hull]
+
+    # round
+    for coord in curr_hull: 
+        coord[0] = round(coord[0],6)
+        coord[1] = round(coord[1],6)
+    
+    # print vert count and area
+    print(f"Vert count: {len(curr_hull)}")
+    print(f"Hull area: {convex_hull.area}")
+
+    # append to geojson
+    geojson["coordinates"].append([curr_hull])
+
+
+    # repair geometries if necessary
+    geojson_shp = shape(geojson) # converts json to shapely
+
+    if not geojson_shp.is_valid:
+        geojson_shp = geojson_shp.buffer(0) # fixes geom
+        geojson = mapping(geojson_shp) # converts back to geojson
+
+    return geojson
+
+
+
 
 
 """
