@@ -2,7 +2,9 @@ import geopandas as gpd
 
 from pyproj import Transformer
 
-from shapely.geometry import shape, mapping
+import json
+
+from shapely.geometry import shape, mapping, MultiPolygon
 from shapely.validation import explain_validity
 from shapely.ops import unary_union
 
@@ -110,8 +112,11 @@ def make_aoi_geojson(buffers_set_df, month_col = "month", month_vals = range(1,1
     # create coordinate converter
     transformer = Transformer.from_crs("EPSG:3310", "EPSG:4326", always_xy=True)
 
-    # filter the geojson for parcels inspected on a given month
-    filtered_json = buffers_set_df.loc[buffers_set_df[month_col].isin(month_vals)].to_geo_dict()["features"]
+    if month_col is not None:
+        # filter the geojson for parcels inspected on a given month
+        filtered_json = buffers_set_df.loc[buffers_set_df[month_col].isin(month_vals)].to_geo_dict()["features"]
+    else:
+        filtered_json = buffers_set_df.to_geo_dict()["features"]
 
     # reformat the coordinates list
     for i in range(len(filtered_json)):
@@ -145,7 +150,7 @@ def make_aoi_geojson(buffers_set_df, month_col = "month", month_vals = range(1,1
         # close the polygon
         curr_buffer.append(curr_buffer[0])
 
-
+        
         # append to master list
         geojson["coordinates"].append([curr_buffer])
 
@@ -159,9 +164,12 @@ def make_aoi_geojson(buffers_set_df, month_col = "month", month_vals = range(1,1
         vert_count = vert_count + len(curr_buffer)
         if vert_count > max_verts:
             vert_count = vert_count - len(curr_buffer)
+            geojson = convert_tuples_to_lists(geojson)
             geojson["coordinates"].pop(-1)
             print(f"Max vert limit reached. Total vertices in this AOI filter: {vert_count}")
             return geojson
+
+    geojson = convert_tuples_to_lists(geojson)
 
     print(f"Total vertices in this AOI filter: {vert_count}")
         
@@ -297,32 +305,112 @@ buffers_set: a "buffer_geometries" geojson created by Lei
 groups_of: how many groups of polygons to split the geojson into
 """
 
+# def make_aoi_geojson_collection(buffers_set, groups_of = 1):
+
+
+#     # create coordinate converter
+#     transformer = Transformer.from_crs("EPSG:3310", "EPSG:4326", always_xy=True)
+
+
+#     # init
+#     geojson_collection = [] # master list for all feature collections
+#     begin = 0 # starting index of window
+#     end = groups_of # ending index of window
+
+#     # loop will repeat until the top of the window is greater than the actual number of polygons in the buffer set
+#     while end < len(buffers_set) + groups_of:
+
+#         # and when that happens, force the top of the window to equal the total number of polygons
+#         if end > len(buffers_set):
+#             print(f"cutting short now by {end - len(buffers_set)}")
+#             end = len(buffers_set)
+
+#         print(f"step: begin = {begin}, end = {end}")
+
+#         # init geojson structure for collection
+#         geojson = {
+#         "type": "MultiPolygon", 
+#         "coordinates": []
+#         }
+
+#         # for every buffer within a window of the buffer collection
+#         for buffer in buffers_set[begin:end]:
+
+#             curr_buffer = (
+#                 buffer
+#                 ["geometry"]["coordinates"] # grab the coords specifically
+#                 [0] # unlists one stage, for formatting
+#                 )
+            
+#             # convert the current buffer polygon to 4326
+#             curr_buffer = [list(transformer.transform(*coord)) for coord in curr_buffer]
+
+#             # close the polygon
+#             curr_buffer.append(curr_buffer[0])
+
+#             # # round
+#             # for coord in curr_buffer: 
+#             #     coord[0] = round(coord[0],6)
+#             #     coord[1] = round(coord[1],6)
+            
+
+#             # append to current feature collection
+#             geojson["coordinates"].append([curr_buffer])
+
+
+#             # repair geometries if necessary
+#             geojson_ch = unary_union(
+#                             MultiPolygon(
+#                                     [
+#                                     shape({"type": "Polygon", "coordinates": coords}) for coords in geojson["coordinates"]
+#                                 ]
+#                             )
+#                         )
+
+
+
+#         # print(geojson_shp)
+#         if not geojson_ch.is_valid:
+#             geojson_ch = geojson_ch.buffer(1e-9) # fixes geom
+#             geojson = mapping(geojson_ch) # converts back to geojson
+#             geojson["coordinates"] = list(geojson["coordinates"])
+#             # print([[[list(geojson) for geojson in geojson["coordinates"][0][0]]]])
+                
+#             # # print(geojson)
+
+
+#             # # geojson_shp = shape(geojson)
+#             # # geojson_ch = geojson_shp.convex_hull
+#             # # geojson = mapping(geojson_ch)
+#             # # print(geojson)
+        
+#         # update window for next set of polygons
+#         begin = begin + groups_of
+#         end = end + groups_of
+
+#         # append current feature collection to master collection
+#         geojson_collection.append(geojson)
+        
+#         # convert all tuples to lists
+#         geojson_collection = convert_tuples_to_lists(geojson_collection)
+
+#     # print(f"total fails {fail_counter} out of {len(buffers_set)}")
+
+#     return geojson_collection
+
+
+
+
+
+"""
+Deprecated versions
+"""
+
+
+
+"""v2"""
 def make_aoi_geojson_collection(buffers_set, groups_of = 1):
 
-
-    def convert_tuples_to_lists(data):
-        """
-        Recursively converts tuples to lists in a nested dictionary or list structure.
-        
-        Parameters:
-            data (any): The input data (dict, list, or tuple).
-            
-        Returns:
-            any: The modified data with tuples converted to lists.
-        """
-        if isinstance(data, tuple):
-            return [convert_tuples_to_lists(item) for item in data]
-        elif isinstance(data, list):
-            return [convert_tuples_to_lists(item) for item in data]
-        elif isinstance(data, dict):
-            return {key: convert_tuples_to_lists(value) for key, value in data.items()}
-        else:
-            return data  # Base case: return the item if it's not a tuple/list/dict
-
-
-
-    # buffers_set is one of the buffers geojsons that Lei generated
-    # groups_of is the number of polygons per feature collection
 
     # create coordinate converter
     transformer = Transformer.from_crs("EPSG:3310", "EPSG:4326", always_xy=True)
@@ -365,9 +453,9 @@ def make_aoi_geojson_collection(buffers_set, groups_of = 1):
             curr_buffer.append(curr_buffer[0])
 
             # round
-            for coord in curr_buffer: 
-                coord[0] = round(coord[0],6)
-                coord[1] = round(coord[1],6)
+            # for coord in curr_buffer: 
+            #     coord[0] = round(coord[0],6)
+            #     coord[1] = round(coord[1],6)
             
 
             # append to current feature collection
@@ -408,12 +496,7 @@ def make_aoi_geojson_collection(buffers_set, groups_of = 1):
 
 
 
-
-
-"""
-Deprecated version
-"""
-
+"""v1"""
 # def make_aoi_geojson_collection(buffers_set, groups_of = 1):
 
 #     # buffers_set is one of the buffers geojsons that Lei generated
