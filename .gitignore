@@ -187,3 +187,5 @@ shp_for_bbox/
 manifest.json
 sample_multipoly_json.geojson
 *.tif
+test_geojsons
+aoi_filter_maker_raw.py
